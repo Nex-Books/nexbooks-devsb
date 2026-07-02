@@ -5,7 +5,7 @@ import {
   Badge, Box, Button, Collapse, Flex, Icon, IconButton, Input, Modal,
   ModalBody, ModalCloseButton, ModalContent, ModalFooter, ModalHeader,
   ModalOverlay, Select, Spinner, Table, Tbody, Td, Text, Th, Thead,
-  Tooltip, Tr, useDisclosure, useToast,
+  Tooltip, Tr, useDisclosure, useToast, Tabs, TabList, Tab,
 } from '@chakra-ui/react';
 import {
   MdAdd, MdChevronRight, MdExpandMore, MdFilterList,
@@ -301,12 +301,25 @@ export default function JournalPage() {
     }
   };
 
+  const getTabIndex = () => {
+    if (filterStatus === 'posted') return 0;
+    if (filterStatus === 'void') return 1;
+    return 2;
+  };
+
+  const handleTabChange = (index: number) => {
+    setPage(1);
+    if (index === 0) setFilterStatus('posted');
+    else if (index === 1) setFilterStatus('void');
+    else setFilterStatus('');
+  };
+
   return (
     <Box bg="gray.50" minH="100%">
       {/* Header */}
-      <Box px={{ base: '20px', md: '32px' }} pt="28px" pb="20px"
+      <Box px={{ base: '20px', md: '32px' }} pt="28px" pb="0"
         bg="white" borderBottom="1px solid" borderColor="gray.200">
-        <Flex align="center" justify="space-between" wrap="wrap" gap="12px">
+        <Flex align="center" justify="space-between" wrap="wrap" gap="12px" mb="16px">
           <Box>
             <Text fontSize="xl" fontWeight="800" color="gray.800" letterSpacing="-0.5px">
               Journal Entries
@@ -324,6 +337,21 @@ export default function JournalPage() {
             </Button>
           </Flex>
         </Flex>
+
+        {/* Status Slicer Tabs */}
+        <Tabs colorScheme="green" variant="line" index={getTabIndex()} onChange={handleTabChange}>
+          <TabList borderBottom="none">
+            <Tab fontSize="sm" fontWeight="600" color="gray.500" _selected={{ color: '#155740', borderColor: '#155740' }} pb="12px">
+              Active Entries
+            </Tab>
+            <Tab fontSize="sm" fontWeight="600" color="gray.500" _selected={{ color: '#EE5D50', borderColor: '#EE5D50' }} pb="12px">
+              Deleted / Voided
+            </Tab>
+            <Tab fontSize="sm" fontWeight="600" color="gray.500" _selected={{ color: '#3965FF', borderColor: '#3965FF' }} pb="12px">
+              All Records
+            </Tab>
+          </TabList>
+        </Tabs>
       </Box>
 
       {/* Filters */}
@@ -345,13 +373,6 @@ export default function JournalPage() {
             <option value="chat">AI Chat</option>
             <option value="invoice_upload">Invoice</option>
             <option value="manual">Manual</option>
-          </Select>
-          <Select size="sm" w="130px" bg="white" borderRadius="8px" borderColor="gray.200"
-            value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}>
-            <option value="posted">Posted Only</option>
-            <option value="">All Status</option>
-            <option value="draft">Draft</option>
-            <option value="void">Void</option>
           </Select>
           <Flex align="center" bg="white" borderRadius="8px" border="1px solid" borderColor="gray.200"
             px="10px" gap="6px">
