@@ -2,12 +2,14 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Badge, Box, Button, Flex, Icon, IconButton, Input, Modal, ModalBody,
-  ModalCloseButton, ModalContent, ModalHeader, ModalOverlay, Select,
-  Spinner, Tab, Table, TabList, TabPanel, TabPanels, Tabs, Tbody, Td,
-  Text, Th, Thead, Tooltip, Tr, useDisclosure, useToast,
+  Badge, Box, Button, Flex, FormLabel, Icon, IconButton, Input, Modal, ModalBody,
+  ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, NumberInput,
+  NumberInputField, Select, Spinner, Tab, Table, TabList, TabPanel, TabPanels, Tabs,
+  Tbody, Td, Text, Th, Thead, Tooltip, Tr, useDisclosure, useToast,
 } from '@chakra-ui/react';
-import { MdAttachFile, MdOpenInNew, MdRefresh, MdUploadFile, MdVisibility } from 'react-icons/md';
+import {
+  MdAdd, MdAttachFile, MdDelete, MdOpenInNew, MdRefresh, MdUploadFile, MdVisibility,
+} from 'react-icons/md';
 import { supabase } from 'lib/supabase';
 import { useAuth } from 'context/AuthContext';
 
@@ -15,6 +17,8 @@ const API = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') || 'http://local
 
 const fmt = (n: number) =>
   '₹' + Math.abs(n).toLocaleString('en-IN', { minimumFractionDigits: 2 });
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
 interface LineItem {
   description: string;
@@ -53,11 +57,24 @@ const STATUS_COLOR: Record<string, string> = {
   cancelled: 'red',
 };
 
+interface DraftLine {
+  description: string;
+  hsn_sac_code: string;
+  quantity: number;
+  rate: number;
+  gst_rate: number;
+}
+
+const emptyDraftLine = (): DraftLine => ({
+  description: '', hsn_sac_code: '', quantity: 1, rate: 0, gst_rate: 18,
+});
+
 export default function InvoicesPage() {
   const { user } = useAuth();
   const toast = useToast();
   const { isOpen: isDetailOpen, onOpen: onDetailOpen, onClose: onDetailClose } = useDisclosure();
   const { isOpen: isUploadOpen, onOpen: onUploadOpen, onClose: onUploadClose } = useDisclosure();
+  const { isOpen: isCreateOpen, onOpen: onCreateOpen, onClose: onCreateClose } = useDisclosure();
 
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +89,17 @@ export default function InvoicesPage() {
   const [uploadHint, setUploadHint] = useState<'purchase' | 'sale'>('purchase');
   const [uploading, setUploading] = useState(false);
   const [uploadResult, setUploadResult] = useState<Record<string, unknown> | null>(null);
+
+  // Manual create state
+  const [draftType, setDraftType] = useState<'purchase' | 'sale'>('purchase');
+  const [draftNumber, setDraftNumber] = useState('');
+  const [draftPartyName, setDraftPartyName] = useState('');
+  const [draftPartyGstin, setDraftPartyGstin] = useState('');
+  const [draftDate, setDraftDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [draftDueDate, setDraftDueDate] = useState('');
+  const [draftSupply, setDraftSupply] = useState<'intrastate' | 'interstate'>('intrastate');
+  const [draftLines, setDraftLines] = useState<DraftLine[]>([emptyDraftLine()]);
+  const [creating, setCreating] = useState(false);
 
   const invType = tabIndex === 0 ? 'purchase' : 'sale';
 
@@ -150,6 +178,101 @@ export default function InvoicesPage() {
   const viewDetail = (inv: Invoice) => {
     setSelectedInvoice(inv);
     onDetailOpen();
+  };
+
+  // ── Manual create helpers ────────────────────────────────────────────────
+  const updateDraftLine = (idx: number, patch: Partial<DraftLine>) => {
+    setDraftLines(lines => lines.map((l, i) => (i === idx ? { ...l, ...patch } : l)));
+  };
+  const addDraftLine = () => setDraftLines(lines => [...lines, emptyDraftLine()]);
+  const removeDraftLine = (idx: number) =>
+    setDraftLines(lines => (lines.length > 1 ? lines.filter((_, i) => i !== idx) : lines));
+
+  const resetDraft = () => {
+    setDraftType(invType);
+    setDraftNumber('');
+    setDraftPartyName('');
+    setDraftPartyGstin('');
+    setDraftDate(new Date().toISOString().slice(0, 10));
+    setDraftDueDate('');
+    setDraftSupply('intrastate');
+    setDraftLines([emptyDraftLine()]);
+  };
+
+  const openCreateModal = () => {
+    resetDraft();
+    onCreateOpen();
+  };
+
+  const computedLines = draftLines.map(l => {
+    const amount = round2(l.quantity * l.rate);
+    const gstAmount = round2((amount * l.gst_rate) / 100);
+    const cgst = draftSupply === 'intrastate' ? round2(gstAmount / 2) : 0;
+    const sgst = draftSupply === 'intrastate' ? round2(gstAmount / 2) : 0;
+    const igst = draftSupply === 'interstate' ? gstAmount : 0;
+    return { ...l, amount, gstAmount, cgst, sgst, igst };
+  });
+  const draftSubtotal = round2(computedLines.reduce((s, l) => s + l.amount, 0));
+  const draftCgst = round2(computedLines.reduce((s, l) => s + l.cgst, 0));
+  const draftSgst = round2(computedLines.reduce((s, l) => s + l.sgst, 0));
+  const draftIgst = round2(computedLines.reduce((s, l) => s + l.igst, 0));
+  const draftTotal = round2(draftSubtotal + draftCgst + draftSgst + draftIgst);
+
+  const handleCreateInvoice = async () => {
+    if (!draftNumber.trim() || !draftPartyName.trim()) {
+      toast({ title: 'Invoice # and party name are required', status: 'warning', duration: 2500 });
+      return;
+    }
+    if (computedLines.some(l => !l.description.trim())) {
+      toast({ title: 'Every line item needs a description', status: 'warning', duration: 2500 });
+      return;
+    }
+    setCreating(true);
+    try {
+      const headers = { ...(await getAuthHeader()), 'Content-Type': 'application/json' };
+      const body = {
+        invoice_number: draftNumber.trim(),
+        vendor_name: draftPartyName.trim(),
+        vendor_gstin: draftPartyGstin.trim() || null,
+        invoice_date: draftDate,
+        due_date: draftDueDate || null,
+        subtotal: draftSubtotal,
+        cgst: draftCgst,
+        sgst: draftSgst,
+        igst: draftIgst,
+        total_amount: draftTotal,
+        invoice_type: draftType,
+        status: 'pending',
+        ai_extracted: false,
+        line_items: computedLines.map(l => ({
+          description: l.description,
+          hsn_sac_code: l.hsn_sac_code || null,
+          quantity: l.quantity,
+          rate: l.rate,
+          amount: l.amount,
+          gst_rate: l.gst_rate,
+          cgst_amount: l.cgst,
+          sgst_amount: l.sgst,
+          igst_amount: l.igst,
+        })),
+      };
+      const params = new URLSearchParams(user?.id ? { user_id: user.id } : {});
+      const res = await fetch(`${API}/finance/invoices?${params}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      toast({ title: `${draftType === 'purchase' ? 'Purchase' : 'Sales'} invoice created`, status: 'success', duration: 2500 });
+      onCreateClose();
+      setTabIndex(draftType === 'purchase' ? 0 : 1);
+      setPage(1);
+      loadInvoices();
+    } catch (e: unknown) {
+      toast({ title: 'Failed to create invoice', description: (e as Error).message, status: 'error', duration: 3000 });
+    } finally {
+      setCreating(false);
+    }
   };
 
   const InvoiceTable = ({ invList }: { invList: Invoice[] }) => (
@@ -244,6 +367,10 @@ export default function InvoicesPage() {
           <Flex gap="8px">
             <IconButton aria-label="Refresh" icon={<MdRefresh />} size="sm" variant="ghost"
               onClick={loadInvoices} isLoading={loading} />
+            <Button leftIcon={<MdAdd />} size="sm" variant="outline" borderColor="#155740"
+              color="#155740" borderRadius="10px" onClick={openCreateModal}>
+              Create Invoice
+            </Button>
             <Button leftIcon={<MdUploadFile />} size="sm" bg="#155740" color="white"
               _hover={{ bg: '#1a7a57' }} borderRadius="10px" onClick={onUploadOpen}>
               Upload Invoice
@@ -272,10 +399,16 @@ export default function InvoicesPage() {
                 <Flex direction="column" align="center" py="60px" gap="12px"
                   bg="white" borderRadius="14px" border="1px solid" borderColor="gray.200">
                   <Text color="gray.500">No purchase invoices yet</Text>
-                  <Button size="sm" bg="#155740" color="white" _hover={{ bg: '#1a7a57' }}
-                    leftIcon={<MdUploadFile />} onClick={onUploadOpen}>
-                    Upload First Invoice
-                  </Button>
+                  <Flex gap="10px">
+                    <Button size="sm" variant="outline" borderColor="#155740" color="#155740"
+                      leftIcon={<MdAdd />} onClick={openCreateModal}>
+                      Create Manually
+                    </Button>
+                    <Button size="sm" bg="#155740" color="white" _hover={{ bg: '#1a7a57' }}
+                      leftIcon={<MdUploadFile />} onClick={onUploadOpen}>
+                      Upload First Invoice
+                    </Button>
+                  </Flex>
                 </Flex>
               ) : <InvoiceTable invList={invoices} />}
             </TabPanel>
@@ -286,6 +419,10 @@ export default function InvoicesPage() {
                 <Flex direction="column" align="center" py="60px" gap="12px"
                   bg="white" borderRadius="14px" border="1px solid" borderColor="gray.200">
                   <Text color="gray.500">No sales invoices yet</Text>
+                  <Button size="sm" variant="outline" borderColor="#155740" color="#155740"
+                    leftIcon={<MdAdd />} onClick={openCreateModal}>
+                    Create Manually
+                  </Button>
                 </Flex>
               ) : <InvoiceTable invList={invoices} />}
             </TabPanel>
@@ -432,6 +569,159 @@ export default function InvoicesPage() {
               </Button>
             </Flex>
           </ModalBody>
+        </ModalContent>
+      </Modal>
+
+      {/* Create Invoice Modal */}
+      <Modal isOpen={isCreateOpen} onClose={onCreateClose} size="2xl" scrollBehavior="inside">
+        <ModalOverlay backdropFilter="blur(4px)" />
+        <ModalContent borderRadius="16px">
+          <ModalHeader fontSize="md" fontWeight="700">Create Invoice</ModalHeader>
+          <ModalCloseButton />
+          <ModalBody pb="4">
+            <Flex direction="column" gap="14px">
+              <Box>
+                <FormLabel fontSize="xs" fontWeight="600" color="gray.600" mb="6px">Invoice Type</FormLabel>
+                <Flex gap="10px">
+                  {(['purchase', 'sale'] as const).map(t => (
+                    <Button key={t} size="sm" variant={draftType === t ? 'solid' : 'outline'}
+                      colorScheme="green" borderRadius="8px" onClick={() => setDraftType(t)} textTransform="capitalize">
+                      {t === 'purchase' ? '🛒 Purchase' : '💰 Sale'}
+                    </Button>
+                  ))}
+                </Flex>
+              </Box>
+
+              <Flex gap="12px" wrap="wrap">
+                <Box flex="1" minW="140px">
+                  <FormLabel fontSize="xs" color="gray.600" mb="4px">Invoice #</FormLabel>
+                  <Input size="sm" borderRadius="8px" value={draftNumber}
+                    onChange={e => setDraftNumber(e.target.value)} placeholder="INV-001" />
+                </Box>
+                <Box flex="1" minW="140px">
+                  <FormLabel fontSize="xs" color="gray.600" mb="4px">
+                    {draftType === 'purchase' ? 'Vendor Name' : 'Customer Name'}
+                  </FormLabel>
+                  <Input size="sm" borderRadius="8px" value={draftPartyName}
+                    onChange={e => setDraftPartyName(e.target.value)} placeholder="Party name" />
+                </Box>
+                <Box flex="1" minW="140px">
+                  <FormLabel fontSize="xs" color="gray.600" mb="4px">GSTIN (optional)</FormLabel>
+                  <Input size="sm" borderRadius="8px" value={draftPartyGstin}
+                    onChange={e => setDraftPartyGstin(e.target.value)} placeholder="22AAAAA0000A1Z5" />
+                </Box>
+              </Flex>
+
+              <Flex gap="12px" wrap="wrap">
+                <Box flex="1" minW="140px">
+                  <FormLabel fontSize="xs" color="gray.600" mb="4px">Invoice Date</FormLabel>
+                  <Input size="sm" borderRadius="8px" type="date" value={draftDate}
+                    onChange={e => setDraftDate(e.target.value)} />
+                </Box>
+                <Box flex="1" minW="140px">
+                  <FormLabel fontSize="xs" color="gray.600" mb="4px">Due Date (optional)</FormLabel>
+                  <Input size="sm" borderRadius="8px" type="date" value={draftDueDate}
+                    onChange={e => setDraftDueDate(e.target.value)} />
+                </Box>
+                <Box flex="1" minW="140px">
+                  <FormLabel fontSize="xs" color="gray.600" mb="4px">Supply Type</FormLabel>
+                  <Select size="sm" borderRadius="8px" value={draftSupply}
+                    onChange={e => setDraftSupply(e.target.value as 'intrastate' | 'interstate')}>
+                    <option value="intrastate">Intrastate (CGST + SGST)</option>
+                    <option value="interstate">Interstate (IGST)</option>
+                  </Select>
+                </Box>
+              </Flex>
+
+              {/* Line items */}
+              <Box>
+                <Flex justify="space-between" align="center" mb="8px">
+                  <Text fontSize="xs" fontWeight="600" color="gray.600">Line Items</Text>
+                  <Button size="xs" leftIcon={<MdAdd />} variant="ghost" colorScheme="green" onClick={addDraftLine}>
+                    Add Line
+                  </Button>
+                </Flex>
+                <Box border="1px solid" borderColor="gray.200" borderRadius="10px" overflow="hidden">
+                  <Table size="sm">
+                    <Thead bg="gray.50">
+                      <Tr>
+                        <Th fontSize="10px">Description</Th>
+                        <Th fontSize="10px" w="90px">HSN/SAC</Th>
+                        <Th isNumeric fontSize="10px" w="64px">Qty</Th>
+                        <Th isNumeric fontSize="10px" w="90px">Rate</Th>
+                        <Th isNumeric fontSize="10px" w="70px">GST%</Th>
+                        <Th isNumeric fontSize="10px" w="90px">Amount</Th>
+                        <Th w="32px"></Th>
+                      </Tr>
+                    </Thead>
+                    <Tbody>
+                      {computedLines.map((l, i) => (
+                        <Tr key={i}>
+                          <Td p="4px">
+                            <Input size="xs" borderRadius="6px" value={l.description}
+                              onChange={e => updateDraftLine(i, { description: e.target.value })}
+                              placeholder="Item / service" />
+                          </Td>
+                          <Td p="4px">
+                            <Input size="xs" borderRadius="6px" value={l.hsn_sac_code}
+                              onChange={e => updateDraftLine(i, { hsn_sac_code: e.target.value })} />
+                          </Td>
+                          <Td p="4px">
+                            <NumberInput size="xs" min={0} value={l.quantity}
+                              onChange={v => updateDraftLine(i, { quantity: parseFloat(v) || 0 })}>
+                              <NumberInputField borderRadius="6px" px="6px" />
+                            </NumberInput>
+                          </Td>
+                          <Td p="4px">
+                            <NumberInput size="xs" min={0} value={l.rate}
+                              onChange={v => updateDraftLine(i, { rate: parseFloat(v) || 0 })}>
+                              <NumberInputField borderRadius="6px" px="6px" />
+                            </NumberInput>
+                          </Td>
+                          <Td p="4px">
+                            <NumberInput size="xs" min={0} max={100} value={l.gst_rate}
+                              onChange={v => updateDraftLine(i, { gst_rate: parseFloat(v) || 0 })}>
+                              <NumberInputField borderRadius="6px" px="6px" />
+                            </NumberInput>
+                          </Td>
+                          <Td isNumeric fontSize="xs" fontFamily="mono" fontWeight="600">
+                            {fmt(l.amount)}
+                          </Td>
+                          <Td p="4px">
+                            <IconButton aria-label="Remove line" icon={<MdDelete />} size="xs"
+                              variant="ghost" colorScheme="red" onClick={() => removeDraftLine(i)} />
+                          </Td>
+                        </Tr>
+                      ))}
+                    </Tbody>
+                  </Table>
+                </Box>
+              </Box>
+
+              {/* Totals */}
+              <Box bg="gray.50" borderRadius="10px" p="14px">
+                <Flex justify="space-between" wrap="wrap" gap="12px">
+                  <Box><Text fontSize="xs" color="gray.500">Subtotal</Text>
+                    <Text fontSize="sm" fontWeight="600" fontFamily="mono">{fmt(draftSubtotal)}</Text></Box>
+                  {draftCgst > 0 && <Box><Text fontSize="xs" color="gray.500">CGST</Text>
+                    <Text fontSize="sm" fontFamily="mono" color="orange.600">{fmt(draftCgst)}</Text></Box>}
+                  {draftSgst > 0 && <Box><Text fontSize="xs" color="gray.500">SGST</Text>
+                    <Text fontSize="sm" fontFamily="mono" color="orange.600">{fmt(draftSgst)}</Text></Box>}
+                  {draftIgst > 0 && <Box><Text fontSize="xs" color="gray.500">IGST</Text>
+                    <Text fontSize="sm" fontFamily="mono" color="orange.600">{fmt(draftIgst)}</Text></Box>}
+                  <Box><Text fontSize="xs" color="gray.500">Total</Text>
+                    <Text fontSize="md" fontWeight="800" color="#155740" fontFamily="mono">{fmt(draftTotal)}</Text></Box>
+                </Flex>
+              </Box>
+            </Flex>
+          </ModalBody>
+          <ModalFooter gap="10px">
+            <Button variant="ghost" onClick={onCreateClose}>Cancel</Button>
+            <Button bg="#155740" color="white" _hover={{ bg: '#1a7a57' }} borderRadius="10px"
+              isLoading={creating} loadingText="Saving…" onClick={handleCreateInvoice}>
+              Save {draftType === 'purchase' ? 'Purchase' : 'Sales'} Invoice
+            </Button>
+          </ModalFooter>
         </ModalContent>
       </Modal>
     </Box>

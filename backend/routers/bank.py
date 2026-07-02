@@ -8,7 +8,8 @@ from pydantic import BaseModel
 
 from services.supabase_service import supabase
 from services.ai_service import AIService
-from routers.chat import _extract_user_id
+from routers.chat import _extract_user_id, _save_journal_entry
+from models.schemas import BankTransactionCreate
 
 router = APIRouter(prefix="/api/bank", tags=["Bank Reconciliation"])
 ai_service = AIService()
@@ -37,6 +38,86 @@ def list_bank_transactions(
     except Exception as e:
         print(f"[bank] Table read error: {e}")
         return {"data": [], "error": "Run Phase 4 migration"}
+
+
+@router.post("/transactions")
+def create_bank_transaction(
+    payload: BankTransactionCreate,
+    user_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    """
+    Manually add a Receipt (money in) or Payment (money out) entry.
+    Also posts the corresponding double-entry journal entry against the
+    Bank account, so the transaction reflects in the ledger/trial balance
+    immediately -- exactly like a reconciled, AI-imported transaction.
+    """
+    uid = _extract_user_id(authorization, user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    txn_kind = payload.transaction_type.strip().lower()
+    if txn_kind not in ("receipt", "payment"):
+        raise HTTPException(status_code=400, detail="transaction_type must be 'Receipt' or 'Payment'")
+
+    is_receipt = txn_kind == "receipt"
+    amount = round(abs(float(payload.amount)), 2)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="amount must be greater than 0")
+
+    now = datetime.now(timezone.utc).isoformat()
+
+    # ── Build the journal entry: Bank vs the counter account ──────────────────
+    if is_receipt:
+        lines = [
+            {"account_name": "Bank", "account_type": "Asset",
+             "debit": amount, "credit": 0.0, "description": payload.description},
+            {"account_name": payload.account_name, "account_type": payload.account_type,
+             "debit": 0.0, "credit": amount, "description": payload.description},
+        ]
+        journal_txn_type = "income"
+    else:
+        lines = [
+            {"account_name": payload.account_name, "account_type": payload.account_type,
+             "debit": amount, "credit": 0.0, "description": payload.description},
+            {"account_name": "Bank", "account_type": "Asset",
+             "debit": 0.0, "credit": amount, "description": payload.description},
+        ]
+        journal_txn_type = "expense"
+
+    journal_entry = {
+        "description": payload.description,
+        "entry_date": payload.transaction_date,
+        "reference": payload.reference_number,
+        "lines": lines,
+        "total_amount": amount,
+        "transaction_type": journal_txn_type,
+    }
+
+    journal_entry_id: Optional[str] = None
+    try:
+        journal_entry_id = _save_journal_entry(uid, journal_entry, source="bank_manual")
+    except Exception as e:
+        print(f"[bank] Journal entry creation failed: {e}")
+
+    insert_row = {
+        "transaction_date": payload.transaction_date,
+        "description": payload.description,
+        "amount": amount if is_receipt else -amount,
+        "transaction_type": "Deposit" if is_receipt else "Withdrawal",
+        "reference_number": payload.reference_number,
+        "status": "reconciled" if journal_entry_id else "unreconciled",
+        "journal_entry_id": journal_entry_id,
+        "created_by": uid,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    try:
+        result = supabase.table("bank_transactions").insert(insert_row).execute()
+        return {"message": f"{payload.transaction_type} recorded", "data": result.data[0]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/upload-statement")
