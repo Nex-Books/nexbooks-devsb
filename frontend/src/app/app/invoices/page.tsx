@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
 import {
   Badge, Box, Button, Flex, FormLabel, Icon, IconButton, Input, Modal, ModalBody,
   ModalCloseButton, ModalContent, ModalFooter, ModalHeader, ModalOverlay, NumberInput,
@@ -72,6 +73,7 @@ const emptyDraftLine = (): DraftLine => ({
 export default function InvoicesPage() {
   const { user } = useAuth();
   const toast = useToast();
+  const searchParams = useSearchParams();
   const { isOpen: isDetailOpen, onOpen: onDetailOpen, onClose: onDetailClose } = useDisclosure();
   const { isOpen: isUploadOpen, onOpen: onUploadOpen, onClose: onUploadClose } = useDisclosure();
   const { isOpen: isCreateOpen, onOpen: onCreateOpen, onClose: onCreateClose } = useDisclosure();
@@ -203,6 +205,15 @@ export default function InvoicesPage() {
     resetDraft();
     onCreateOpen();
   };
+
+  // Deep link support: /app/invoices?create=1 opens the manual create modal
+  // immediately (used by the Dashboard "Add Invoice" quick action).
+  useEffect(() => {
+    if (searchParams?.get('create') === '1') {
+      openCreateModal();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const computedLines = draftLines.map(l => {
     const amount = round2(l.quantity * l.rate);
