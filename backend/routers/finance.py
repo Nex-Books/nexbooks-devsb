@@ -5,8 +5,11 @@ from datetime import datetime, timezone
 
 from models.schemas import InvoiceCreate, TDSEntryCreate, GSTReturnCreate
 from services.supabase_service import supabase
+from services.ai_service import AIService
+from routers.chat import _save_journal_entry
 
 router = APIRouter(prefix="/finance", tags=["Finance"])
+ai_service = AIService()
 
 
 def _get_user_id(authorization: Optional[str], fallback: Optional[str] = None) -> str:
@@ -94,6 +97,29 @@ def create_invoice(
     uid = _get_user_id(authorization, user_id)
     now = datetime.now(timezone.utc).isoformat()
 
+    # Build and post the double-entry journal entry for this invoice, so
+    # manually-created invoices affect the ledger/trial balance/P&L exactly
+    # like AI-extracted invoices do.
+    journal_entry_id: Optional[str] = None
+    try:
+        journal_source = {
+            "invoice_type": payload.invoice_type,
+            "vendor_name": payload.vendor_name,
+            "buyer_name": payload.vendor_name,
+            "subtotal": float(payload.subtotal),
+            "cgst_amount": float(payload.cgst),
+            "sgst_amount": float(payload.sgst),
+            "igst_amount": float(payload.igst),
+            "total_amount": float(payload.total_amount),
+            "invoice_number": payload.invoice_number,
+            "invoice_date": payload.invoice_date,
+            "tds_amount": 0,
+        }
+        journal_entry = ai_service.build_invoice_journal_entry(journal_source)
+        journal_entry_id = _save_journal_entry(uid, journal_entry, source="invoice_manual")
+    except Exception as e:
+        print(f"[finance] Journal entry creation failed: {e}")
+
     inv_data = {
         "invoice_number": payload.invoice_number,
         "vendor_name": payload.vendor_name,
@@ -106,9 +132,10 @@ def create_invoice(
         "igst": float(payload.igst),
         "total_amount": float(payload.total_amount),
         "invoice_type": payload.invoice_type,
-        "status": payload.status,
+        "status": "booked" if journal_entry_id else payload.status,
         "file_url": payload.file_url,
         "ai_extracted": payload.ai_extracted,
+        "journal_entry_id": journal_entry_id,
         "created_by": uid,
         "created_at": now,
         "updated_at": now,
@@ -117,6 +144,7 @@ def create_invoice(
     try:
         inv_result = supabase.table("invoices").insert(inv_data).execute()
         inv = inv_result.data[0]
+        inv["journal_entry_id"] = journal_entry_id
 
         # Insert line items if provided
         if payload.line_items:

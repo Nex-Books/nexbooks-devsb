@@ -783,6 +783,13 @@ export default function DashboardPage() {
               iconColor="#51BC8F"
             />
             <QuickAction
+              label="Add Invoice"
+              icon={MdAddCircleOutline}
+              href="/app/invoices?create=1"
+              iconBg="#E6FAF5"
+              iconColor="#51BC8F"
+            />
+            <QuickAction
               label="Upload Invoice"
               icon={MdUploadFile}
               href="/app/invoices"

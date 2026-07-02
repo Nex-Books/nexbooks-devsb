@@ -57,6 +57,7 @@ export default function LedgerPage() {
   const [loading, setLoading] = useState(false);
   const [accountsLoading, setAccountsLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
 
   // Load chart of accounts for the dropdown
   useEffect(() => {
@@ -125,6 +126,11 @@ export default function LedgerPage() {
     r.narration?.toLowerCase().includes(searchTerm.toLowerCase()) ||
     r.reference_number?.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  // Rows arrive from the backend oldest-first (required for the running
+  // balance to be correct). For display only, "newest" reverses that order
+  // without touching the underlying running_balance values.
+  const displayRows = sortOrder === 'newest' ? [...filtered].reverse() : filtered;
 
   const totalDebit = filtered.reduce((s, r) => s + (r.debit || 0), 0);
   const totalCredit = filtered.reduce((s, r) => s + (r.credit || 0), 0);
@@ -218,6 +224,22 @@ export default function LedgerPage() {
               />
             </InputGroup>
           </Box>
+
+          <Box flex="1" minW="160px">
+            <Text fontSize="xs" fontWeight="700" color={TEXT_MUTED} mb="6px" letterSpacing="0.5px" textTransform="uppercase">
+              Sort
+            </Text>
+            <Select
+              value={sortOrder}
+              onChange={e => setSortOrder(e.target.value as 'newest' | 'oldest')}
+              borderRadius="10px"
+              fontSize="sm"
+              size="md"
+            >
+              <option value="newest">Recent first</option>
+              <option value="oldest">Oldest first</option>
+            </Select>
+          </Box>
         </Flex>
       </Box>
 
@@ -305,7 +327,7 @@ export default function LedgerPage() {
                 </Tr>
               </Thead>
               <Tbody>
-                {filtered.map((row) => (
+                {displayRows.map((row) => (
                   <Tr key={row.id} _hover={{ bg: PAGE_BG }}>
                     <Td px="24px" borderColor={BORDER} py="12px" whiteSpace="nowrap">
                       <Text fontSize="xs" color={TEXT_BODY} fontFamily="mono">

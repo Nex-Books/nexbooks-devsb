@@ -132,6 +132,19 @@ class TDSEntryCreate(BaseModel):
     quarter: Optional[str] = None
 
 
+# ─── Bank Transaction (Manual Receipt / Payment) ─────────────────────────────
+
+class BankTransactionCreate(BaseModel):
+    transaction_date: str          # YYYY-MM-DD
+    description: str
+    amount: float                  # always positive; sign derived from transaction_type
+    transaction_type: str          # 'Receipt' | 'Payment'
+    account_name: str              # counter account, e.g. "Sales Revenue", "Rent Expense"
+    account_type: str = "Income"   # Income | Expense | Asset | Liability
+    reference_number: Optional[str] = None
+    party_name: Optional[str] = None
+
+
 # ─── GST Return ──────────────────────────────────────────────────────────────
 
 class GSTReturnCreate(BaseModel):
