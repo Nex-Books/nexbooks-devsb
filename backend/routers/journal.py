@@ -49,7 +49,7 @@ def list_journal_entries(
     ai_generated: Optional[bool] = Query(None),
     account: Optional[str] = Query(None),          # filter by account name
     page: int = Query(1, ge=1),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
     authorization: Optional[str] = Header(None),
 ):
     uid = _extract_user_id(authorization, user_id)
@@ -295,7 +295,6 @@ def void_journal_entry(
             supabase.table("journal_entries")
             .update({
                 "status": "void",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
             })
             .eq("id", entry_id)
             .eq("user_id", uid)
@@ -304,6 +303,7 @@ def void_journal_entry(
         return {"message": "Journal entry voided successfully", "entry": result.data[0]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 # ─── GET /api/journal-entries/ledger ─────────────────────────────────────────

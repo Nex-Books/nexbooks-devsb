@@ -354,7 +354,68 @@ CREATE POLICY "gst_returns_delete" ON public.gst_returns
     FOR DELETE TO authenticated
     USING (created_by = auth.uid());
 
+-- 8f. journal_entries
+ALTER TABLE public.journal_entries ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "journal_entries_select" ON public.journal_entries
+    FOR SELECT TO authenticated
+    USING (user_id = auth.uid());
+
+CREATE POLICY "journal_entries_insert" ON public.journal_entries
+    FOR INSERT TO authenticated
+    WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "journal_entries_update" ON public.journal_entries
+    FOR UPDATE TO authenticated
+    USING (user_id = auth.uid())
+    WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "journal_entries_delete" ON public.journal_entries
+    FOR DELETE TO authenticated
+    USING (user_id = auth.uid());
+
+-- 8g. journal_lines
+ALTER TABLE public.journal_lines ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "journal_lines_select" ON public.journal_lines
+    FOR SELECT TO authenticated
+    USING (
+        journal_entry_id IN (
+            SELECT id FROM public.journal_entries WHERE user_id = auth.uid()
+        )
+    );
+
+CREATE POLICY "journal_lines_insert" ON public.journal_lines
+    FOR INSERT TO authenticated
+    WITH CHECK (
+        journal_entry_id IN (
+            SELECT id FROM public.journal_entries WHERE user_id = auth.uid()
+        )
+    );
+
+CREATE POLICY "journal_lines_update" ON public.journal_lines
+    FOR UPDATE TO authenticated
+    USING (
+        journal_entry_id IN (
+            SELECT id FROM public.journal_entries WHERE user_id = auth.uid()
+        )
+    )
+    WITH CHECK (
+        journal_entry_id IN (
+            SELECT id FROM public.journal_entries WHERE user_id = auth.uid()
+        )
+    );
+
+CREATE POLICY "journal_lines_delete" ON public.journal_lines
+    FOR DELETE TO authenticated
+    USING (
+        journal_entry_id IN (
+            SELECT id FROM public.journal_entries WHERE user_id = auth.uid()
+        )
+    );
+
 -- ────────────────────────────────────────────────────────────
+
 -- 9. INDEXES for performance
 -- ────────────────────────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_coa_type       ON public.chart_of_accounts (account_type);

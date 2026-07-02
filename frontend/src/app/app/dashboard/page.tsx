@@ -39,6 +39,9 @@ import { supabase } from 'lib/supabase';
 
 const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
 
+const API = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') || 'http://localhost:8000';
+
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface JournalLine {
@@ -334,19 +337,24 @@ export default function DashboardPage() {
     day: 'numeric',
   });
 
+  const getAuthHeader = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+  }, []);
+
   const fetchData = useCallback(async () => {
     if (!user) return;
     setIsLoading(true);
     try {
-      const { data } = await supabase
-        .from('journal_entries')
-        .select('id, entry_date, description, total_amount, transaction_type, journal_lines(account_name, account_type, debit, credit)')
-        .eq('user_id', user.id)
-        .neq('status', 'void')
-        .order('entry_date', { ascending: false })
-        .limit(500);
+      const headers = await getAuthHeader();
+      const res = await fetch(`${API}/api/journal-entries?user_id=${user.id}&limit=500&status=posted`, { headers });
+      const data = await res.json();
+      
+      const all = (data.data || []).map((e: any) => ({
+        ...e,
+        journal_lines: e.lines || [],
+      }));
 
-      const all = (data as JournalEntry[]) ?? [];
       setEntries(all.slice(0, 10));
       setKpis(computeKPIs(all));
       setMonthlyData(buildMonthlyBuckets(all));
@@ -356,7 +364,7 @@ export default function DashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [user]);
+  }, [user, getAuthHeader]);
 
   // Initial load
   useEffect(() => {
