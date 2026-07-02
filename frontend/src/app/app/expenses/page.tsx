@@ -16,6 +16,9 @@ import { useAuth } from 'context/AuthContext';
 
 const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
 
+const API = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') || 'http://localhost:8000';
+
+
 const CARD_SHADOW = '0px 18px 40px rgba(112,144,176,0.12)';
 const TEXT_DARK = '#1B2559';
 const TEXT_MUTED = '#AEB2B9';
@@ -59,25 +62,40 @@ export default function ExpensesPage() {
     setDateTo(new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split('T')[0]);
   }, []);
 
+  const getAuthHeader = useCallback(async () => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
+  }, []);
+
   const fetchExpenses = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     try {
-      let q = supabase
-        .from('journal_entries')
-        .select('id, entry_date, description, total_amount, transaction_type, source, ai_generated, journal_lines(account_name, account_type, debit, credit)')
-        .eq('user_id', user.id)
-        .eq('transaction_type', 'expense')
-        .neq('status', 'void')
-        .order('entry_date', { ascending: false })
-        .limit(200);
-      if (dateFrom) q = q.gte('entry_date', dateFrom);
-      if (dateTo) q = q.lte('entry_date', dateTo);
-      const { data } = await q;
-      setEntries((data as ExpenseEntry[]) || []);
-    } catch (e) { console.error(e); }
-    finally { setLoading(false); }
-  }, [user, dateFrom, dateTo]);
+      const headers = await getAuthHeader();
+      const params = new URLSearchParams({
+        user_id: user.id,
+        limit: '500',
+        status: 'posted',
+        ...(dateFrom && { date_from: dateFrom }),
+        ...(dateTo && { date_to: dateTo }),
+      });
+      const res = await fetch(`${API}/api/journal-entries?${params}`, { headers });
+      const data = await res.json();
+      
+      const all = (data.data || []).map((e: any) => ({
+        ...e,
+        journal_lines: e.lines || [],
+      }));
+
+      // Filter for expense transactions only
+      const expensesOnly = all.filter((e: any) => e.transaction_type === 'expense');
+      setEntries(expensesOnly);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }, [user, dateFrom, dateTo, getAuthHeader]);
 
   useEffect(() => { if (dateFrom && dateTo) fetchExpenses(); }, [fetchExpenses, dateFrom, dateTo]);
 
