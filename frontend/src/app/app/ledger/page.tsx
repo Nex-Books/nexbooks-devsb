@@ -97,7 +97,10 @@ export default function LedgerPage() {
     setLoading(true);
     try {
       const token = (await supabase.auth.getSession()).data.session?.access_token;
-      const params = new URLSearchParams({ account_name: selectedAccount });
+      const params = new URLSearchParams({
+        account_name: selectedAccount,
+        user_id: user.id,
+      });
       if (dateFrom) params.append('date_from', dateFrom);
       if (dateTo) params.append('date_to', dateTo);
 
