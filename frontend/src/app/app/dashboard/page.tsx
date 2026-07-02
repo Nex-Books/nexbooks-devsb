@@ -2,14 +2,13 @@
 
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Box,
   Button,
   Flex,
   Grid,
   Icon,
-  IconButton,
   Skeleton,
   Table,
   Tbody,
@@ -27,7 +26,6 @@ import {
   MdGavel,
   MdOutlineReceiptLong,
   MdPeople,
-  MdRefresh,
   MdShowChart,
   MdTrendingDown,
   MdTrendingUp,
@@ -38,9 +36,6 @@ import { useAuth } from 'context/AuthContext';
 import { supabase } from 'lib/supabase';
 
 const Chart = dynamic(() => import('react-apexcharts'), { ssr: false });
-
-const API = process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, '') || 'http://localhost:8000';
-
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -57,6 +52,7 @@ interface JournalEntry {
   description: string;
   total_amount: number;
   transaction_type: string;
+  status?: string;
   journal_lines?: JournalLine[];
 }
 
@@ -95,12 +91,6 @@ const formatINR = (n: number) =>
     maximumFractionDigits: 0,
   }).format(n);
 
-// Parse a YYYY-MM-DD date string in LOCAL time (avoid UTC shift bug)
-function parseLocalDate(dateStr: string): Date {
-  const [y, m, d] = dateStr.split('-').map(Number);
-  return new Date(y, m - 1, d);
-}
-
 function getLast6Months(): MonthBucket[] {
   const now = new Date();
   return Array.from({ length: 6 }, (_, i) => {
@@ -118,88 +108,17 @@ function getLast6Months(): MonthBucket[] {
 function buildMonthlyBuckets(entries: JournalEntry[]): MonthBucket[] {
   const buckets = getLast6Months();
   entries.forEach((e) => {
-    // Use local date parsing to avoid UTC shift by 1 day
-    const d = parseLocalDate(e.entry_date);
+    const d = new Date(e.entry_date);
     const b = buckets.find((x) => x.year === d.getFullYear() && x.month === d.getMonth());
     if (!b) return;
-    if (e.transaction_type === 'income') b.revenue += e.total_amount ?? 0;
-    else if (e.transaction_type === 'expense') b.expense += e.total_amount ?? 0;
-  });
-  return buckets;
-}
-
-function computeKPIs(all: JournalEntry[]): KPIs {
-  const totalRevenue = all
-    .filter((e) => e.transaction_type === 'income')
-    .reduce((s, e) => s + (e.total_amount ?? 0), 0);
-  const totalExpenses = all
-    .filter((e) => e.transaction_type === 'expense')
-    .reduce((s, e) => s + (e.total_amount ?? 0), 0);
-
-  // Compute account balances from all journal lines
-  const accBalance: Record<string, { type: string; debit: number; credit: number }> = {};
-  all.forEach(entry => {
-    (entry.journal_lines || []).forEach(line => {
-      const name = (line.account_name || '').toLowerCase().trim();
-      if (!name) return;
-      if (!accBalance[name]) accBalance[name] = { type: line.account_type, debit: 0, credit: 0 };
-      accBalance[name].debit += line.debit || 0;
-      accBalance[name].credit += line.credit || 0;
+    (e.journal_lines || []).forEach((line) => {
+      const debit = Number(line.debit) || 0;
+      const credit = Number(line.credit) || 0;
+      if (line.account_type === 'Revenue') b.revenue += credit - debit;
+      else if (line.account_type === 'Expense') b.expense += debit - credit;
     });
   });
-
-  // Cash Balance = sum of Cash in Hand + Bank Account balances (debit normal)
-  let cashBalance = 0;
-  Object.entries(accBalance).forEach(([name, v]) => {
-    if (name.includes('cash') || name.includes('bank')) {
-      cashBalance += v.debit - v.credit;
-    }
-  });
-
-  // A/R = Accounts Receivable debit balance
-  let accountsReceivable = 0;
-  Object.entries(accBalance).forEach(([name, v]) => {
-    if (name.includes('receivable')) {
-      accountsReceivable += v.debit - v.credit;
-    }
-  });
-
-  // A/P = Accounts Payable credit balance (exclude GST and TDS payable)
-  let accountsPayable = 0;
-  Object.entries(accBalance).forEach(([name, v]) => {
-    if (name.includes('payable') && !name.includes('gst') && !name.includes('tds') && !name.includes('tax')) {
-      accountsPayable += v.credit - v.debit;
-    }
-  });
-
-  // GST Payable = GST Payable / Output accounts (net credit balance)
-  let gstPayable = 0;
-  Object.entries(accBalance).forEach(([name, v]) => {
-    if ((name.includes('gst') || name.includes('output')) && name.includes('payable')) {
-      gstPayable += v.credit - v.debit;
-    } else if (name.includes('cgst payable') || name.includes('sgst payable') || name.includes('igst payable')) {
-      gstPayable += v.credit - v.debit;
-    }
-  });
-
-  // GST Receivable = GST Input Credit accounts (net debit balance)
-  let gstReceivable = 0;
-  Object.entries(accBalance).forEach(([name, v]) => {
-    if (name.includes('gst') && (name.includes('input') || name.includes('credit') || name.includes('receivable'))) {
-      gstReceivable += v.debit - v.credit;
-    }
-  });
-
-  return {
-    totalRevenue,
-    totalExpenses,
-    netIncome: totalRevenue - totalExpenses,
-    cashBalance: Math.max(0, cashBalance),
-    accountsReceivable: Math.max(0, accountsReceivable),
-    accountsPayable: Math.max(0, accountsPayable),
-    gstPayable: Math.max(0, gstPayable),
-    gstReceivable: Math.max(0, gstReceivable),
-  };
+  return buckets;
 }
 
 // ─── Stat Card (Horizon style) ────────────────────────────────────────────────
@@ -323,7 +242,6 @@ export default function DashboardPage() {
   });
   const [monthlyData, setMonthlyData] = useState<MonthBucket[]>(getLast6Months());
   const [isLoading, setIsLoading] = useState(true);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const name =
     (user?.user_metadata?.full_name as string) ||
@@ -337,66 +255,127 @@ export default function DashboardPage() {
     day: 'numeric',
   });
 
-  const getAuthHeader = useCallback(async () => {
-    const { data: { session } } = await supabase.auth.getSession();
-    return session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {};
-  }, []);
-
-  const fetchData = useCallback(async () => {
-    if (!user) return;
-    setIsLoading(true);
-    try {
-      const headers = await getAuthHeader();
-      const res = await fetch(`${API}/api/journal-entries?user_id=${user.id}&limit=500&status=posted`, { headers });
-      const data = await res.json();
-      
-      const all = (data.data || []).map((e: any) => ({
-        ...e,
-        journal_lines: e.lines || [],
-      }));
-
-      setEntries(all.slice(0, 10));
-      setKpis(computeKPIs(all));
-      setMonthlyData(buildMonthlyBuckets(all));
-      setLastUpdated(new Date());
-    } catch (err) {
-      console.error('[dashboard] fetch error', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [user, getAuthHeader]);
-
-  // Initial load
   useEffect(() => {
     if (!user) return;
-    fetchData();
-  }, [user, fetchData]);
+    async function fetchData() {
+      try {
+        // Use the same two-query ledger calculation as Financial Reports.
+        // Embedded journal_lines can be hidden by relationship/RLS differences
+        // and was causing every dashboard value to silently fall back to zero.
+        const { data: entryData, error: entriesError } = await supabase
+          .from('journal_entries')
+          .select('id, entry_date, description, total_amount, transaction_type, status')
+          .eq('user_id', user!.id)
+          .neq('status', 'void')
+          .order('entry_date', { ascending: false })
+          .limit(200);
 
-  // ── Supabase Realtime subscription for auto-refresh ────────────────────────
-  useEffect(() => {
-    if (!user) return;
+        if (entriesError) throw entriesError;
 
-    const channel = supabase
-      .channel('dashboard-realtime')
-      .on(
-        'postgres_changes',
-        {
-          event: '*', // INSERT, UPDATE, DELETE
-          schema: 'public',
-          table: 'journal_entries',
-          filter: `user_id=eq.${user.id}`,
-        },
-        () => {
-          // Re-fetch data whenever journal_entries change
-          fetchData();
+        const rawEntries = (entryData as JournalEntry[]) ?? [];
+        const entryIds = rawEntries.map((entry) => entry.id);
+        let lines: (JournalLine & { journal_entry_id: string })[] = [];
+
+        if (entryIds.length) {
+          const { data: lineData, error: linesError } = await supabase
+            .from('journal_lines')
+            .select('journal_entry_id, account_name, account_type, debit, credit')
+            .in('journal_entry_id', entryIds);
+          if (linesError) throw linesError;
+          lines = (lineData || []) as (JournalLine & { journal_entry_id: string })[];
         }
-      )
-      .subscribe();
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user, fetchData]);
+        const linesByEntry: Record<string, JournalLine[]> = {};
+        lines.forEach((line) => {
+          if (!linesByEntry[line.journal_entry_id]) linesByEntry[line.journal_entry_id] = [];
+          linesByEntry[line.journal_entry_id].push(line);
+        });
+        const all = rawEntries.map((entry) => ({
+          ...entry,
+          total_amount: Number(entry.total_amount) || 0,
+          journal_lines: linesByEntry[entry.id] || [],
+        }));
+        setEntries(all.slice(0, 10));
+
+        const totalRevenue = lines.reduce((sum, line) =>
+          line.account_type === 'Revenue'
+            ? sum + (Number(line.credit) || 0) - (Number(line.debit) || 0)
+            : sum, 0);
+        const totalExpenses = lines.reduce((sum, line) =>
+          line.account_type === 'Expense'
+            ? sum + (Number(line.debit) || 0) - (Number(line.credit) || 0)
+            : sum, 0);
+
+        // Compute account balances from all journal lines
+        const accBalance: Record<string, { type: string; debit: number; credit: number }> = {};
+        all.forEach(entry => {
+          (entry.journal_lines || []).forEach(line => {
+            const name = line.account_name?.toLowerCase() || '';
+            if (!accBalance[name]) accBalance[name] = { type: line.account_type, debit: 0, credit: 0 };
+            accBalance[name].debit += Number(line.debit) || 0;
+            accBalance[name].credit += Number(line.credit) || 0;
+          });
+        });
+
+        // Cash Balance = sum of Cash in Hand + Bank Account balances (debit normal)
+        let cashBalance = 0;
+        Object.entries(accBalance).forEach(([name, v]) => {
+          if (name.includes('cash') || name.includes('bank')) {
+            cashBalance += v.debit - v.credit;
+          }
+        });
+
+        // A/R = Accounts Receivable debit balance
+        let accountsReceivable = 0;
+        Object.entries(accBalance).forEach(([name, v]) => {
+          if (name.includes('receivable')) {
+            accountsReceivable += v.debit - v.credit;
+          }
+        });
+
+        // A/P = Accounts Payable credit balance
+        let accountsPayable = 0;
+        Object.entries(accBalance).forEach(([name, v]) => {
+          if (name.includes('payable') && !name.includes('gst') && !name.includes('tds')) {
+            accountsPayable += v.credit - v.debit;
+          }
+        });
+
+        // GST Payable = GST Payable accounts (net credit balance)
+        let gstPayable = 0;
+        Object.entries(accBalance).forEach(([name, v]) => {
+          if (name.includes('gst payable') || name.includes('gst payable')) {
+            gstPayable += v.credit - v.debit;
+          }
+        });
+
+        // GST Receivable = GST Input Credit accounts (net debit balance)
+        let gstReceivable = 0;
+        Object.entries(accBalance).forEach(([name, v]) => {
+          if (name.includes('gst input') || name.includes('input credit')) {
+            gstReceivable += v.debit - v.credit;
+          }
+        });
+
+        setKpis({
+          totalRevenue,
+          totalExpenses,
+          netIncome: totalRevenue - totalExpenses,
+          cashBalance: Math.max(0, cashBalance),
+          accountsReceivable: Math.max(0, accountsReceivable),
+          accountsPayable: Math.max(0, accountsPayable),
+          gstPayable: Math.max(0, gstPayable),
+          gstReceivable: Math.max(0, gstReceivable),
+        });
+        setMonthlyData(buildMonthlyBuckets(all));
+      } catch (error) {
+        console.error('Failed to load dashboard financial data', error);
+      } finally {
+        setIsLoading(false);
+      }
+    }
+    fetchData();
+  }, [user]);
 
   // ── Chart configs ──────────────────────────────────────────────────────────
 
@@ -475,24 +454,6 @@ export default function DashboardPage() {
             {today}
           </Text>
         </Box>
-        <Flex align="center" gap="8px">
-          {lastUpdated && (
-            <Text fontSize="xs" color={TEXT_MUTED}>
-              Updated {lastUpdated.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-            </Text>
-          )}
-          <IconButton
-            aria-label="Refresh dashboard"
-            icon={<MdRefresh />}
-            size="sm"
-            variant="ghost"
-            color={TEXT_BODY}
-            onClick={fetchData}
-            isLoading={isLoading}
-            borderRadius="10px"
-            _hover={{ bg: '#E6FAF5', color: '#51BC8F' }}
-          />
-        </Flex>
       </Flex>
 
       {/* ── KPI Cards ──────────────────────────────────────────────────────── */}
@@ -715,7 +676,7 @@ export default function DashboardPage() {
                       <Tr key={e.id} _hover={{ bg: PAGE_BG }}>
                         <Td px="24px" borderColor={BORDER} py="14px">
                           <Text fontSize="xs" color={TEXT_BODY} fontFamily="mono" whiteSpace="nowrap">
-                            {parseLocalDate(e.entry_date).toLocaleDateString('en-IN', {
+                            {new Date(e.entry_date).toLocaleDateString('en-IN', {
                               day: '2-digit',
                               month: 'short',
                               year: 'numeric',
