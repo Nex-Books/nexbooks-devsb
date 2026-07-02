@@ -132,6 +132,42 @@ def update_party(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/{party_id}")
+def delete_party(
+    party_id: str,
+    user_id: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None),
+):
+    uid = _extract_user_id(authorization, user_id)
+    if not uid:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        # Verify ownership first
+        check = (
+            supabase.table("parties")
+            .select("id, party_name")
+            .eq("id", party_id)
+            .eq("created_by", uid)
+            .execute()
+        )
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Party not found")
+
+        result = (
+            supabase.table("parties")
+            .delete()
+            .eq("id", party_id)
+            .eq("created_by", uid)
+            .execute()
+        )
+        return {"message": "Party deleted successfully", "id": party_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{party_id}/summary")
 def get_party_summary(
     party_id: str,

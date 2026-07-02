@@ -209,6 +209,39 @@ def update_invoice_status(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.delete("/invoices/{invoice_id}")
+def delete_invoice(
+    invoice_id: str,
+    authorization: Optional[str] = Header(None),
+    user_id: Optional[str] = Query(None),
+):
+    uid = _get_user_id(authorization, user_id)
+
+    try:
+        # Verify ownership
+        check = (
+            supabase.table("invoices")
+            .select("id")
+            .eq("id", invoice_id)
+            .eq("created_by", uid)
+            .execute()
+        )
+        if not check.data:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+
+        # Delete line items first (cascade)
+        supabase.table("invoice_line_items").delete().eq("invoice_id", invoice_id).execute()
+
+        # Delete the invoice
+        supabase.table("invoices").delete().eq("id", invoice_id).eq("created_by", uid).execute()
+
+        return {"message": "Invoice deleted successfully", "id": invoice_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─── TDS ENTRIES ─────────────────────────────────────────────────────────────
 
 @router.get("/tds")

@@ -34,8 +34,9 @@ interface ExpenseEntry {
   transaction_type: string;
   source?: string;
   ai_generated?: boolean;
-  lines?: { account_name: string; account_type: string; debit: number; credit: number }[];
+  journal_lines?: { account_name: string; account_type: string; debit: number; credit: number }[];
 }
+
 
 const EXPENSE_COLORS = [
   '#3965FF', '#7551FF', '#EE5D50', '#FFB547', '#01B574',
@@ -91,16 +92,17 @@ export default function ExpensesPage() {
   // Category breakdown — from expense journal lines
   const byCategory: Record<string, number> = {};
   filtered.forEach(entry => {
-    (entry.lines || []).forEach(line => {
+    (entry.journal_lines || []).forEach(line => {
       if (line.account_type === 'Expense' && line.debit > 0) {
         byCategory[line.account_name] = (byCategory[line.account_name] || 0) + line.debit;
       }
     });
     // If no lines available, use entry itself
-    if (!entry.lines?.length) {
+    if (!entry.journal_lines?.length) {
       byCategory['Uncategorized'] = (byCategory['Uncategorized'] || 0) + entry.total_amount;
     }
   });
+
 
   const categoryLabels = Object.keys(byCategory);
   const categoryValues = Object.values(byCategory);
@@ -260,7 +262,7 @@ export default function ExpensesPage() {
               </Thead>
               <Tbody>
                 {filtered.map(e => {
-                  const expLine = e.lines?.find(l => l.account_type === 'Expense' && l.debit > 0);
+                  const expLine = e.journal_lines?.find(l => l.account_type === 'Expense' && l.debit > 0);
                   const category = expLine?.account_name || 'Expense';
                   return (
                     <Tr key={e.id} _hover={{ bg: PAGE_BG }}>

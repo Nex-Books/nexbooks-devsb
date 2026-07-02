@@ -193,7 +193,7 @@ export default function JournalPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [filterSource, setFilterSource] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
+  const [filterStatus, setFilterStatus] = useState('posted');
   const [searchAccount, setSearchAccount] = useState('');
 
   // Manual entry form
@@ -247,6 +247,10 @@ export default function JournalPage() {
       });
       if (!res.ok) throw new Error('Void failed');
       toast({ title: 'Entry voided', status: 'success', duration: 2000 });
+      // Optimistically remove from local state immediately
+      setEntries(prev => prev.filter(e => e.id !== entryId));
+      setTotal(prev => Math.max(0, prev - 1));
+      // Then reload to sync with server
       loadEntries();
     } catch {
       toast({ title: 'Failed to void entry', status: 'error', duration: 2000 });
@@ -344,8 +348,8 @@ export default function JournalPage() {
           </Select>
           <Select size="sm" w="130px" bg="white" borderRadius="8px" borderColor="gray.200"
             value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}>
+            <option value="posted">Posted Only</option>
             <option value="">All Status</option>
-            <option value="posted">Posted</option>
             <option value="draft">Draft</option>
             <option value="void">Void</option>
           </Select>
