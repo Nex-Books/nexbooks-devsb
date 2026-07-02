@@ -193,7 +193,7 @@ export default function JournalPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [filterSource, setFilterSource] = useState('');
-  const [filterStatus, setFilterStatus] = useState('posted');
+  const [filterStatus, setFilterStatus] = useState('');
   const [searchAccount, setSearchAccount] = useState('');
 
   // Manual entry form
@@ -245,15 +245,21 @@ export default function JournalPage() {
         method: 'POST',
         headers,
       });
-      if (!res.ok) throw new Error('Void failed');
+      if (!res.ok) {
+        const errorBody = await res.json().catch(() => null);
+        throw new Error(errorBody?.detail || `Void failed (HTTP ${res.status})`);
+      }
       toast({ title: 'Entry voided', status: 'success', duration: 2000 });
-      // Optimistically remove from local state immediately
-      setEntries(prev => prev.filter(e => e.id !== entryId));
-      setTotal(prev => Math.max(0, prev - 1));
-      // Then reload to sync with server
       loadEntries();
-    } catch {
-      toast({ title: 'Failed to void entry', status: 'error', duration: 2000 });
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'Unknown error';
+      toast({
+        title: 'Failed to void entry',
+        description: detail,
+        status: 'error',
+        duration: 6000,
+        isClosable: true,
+      });
     }
   };
 
@@ -348,8 +354,8 @@ export default function JournalPage() {
           </Select>
           <Select size="sm" w="130px" bg="white" borderRadius="8px" borderColor="gray.200"
             value={filterStatus} onChange={e => { setFilterStatus(e.target.value); setPage(1); }}>
-            <option value="posted">Posted Only</option>
             <option value="">All Status</option>
+            <option value="posted">Posted</option>
             <option value="draft">Draft</option>
             <option value="void">Void</option>
           </Select>
